@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Time Counter</title>
+    <style>
+      label {
+        font-weight: bold;
+      }
+
+      #general_status {
+        margin-top: 50px;
+        font-family: sans-serif;
+        border: 1px double;
+      }
+    </style>
+  </head>
+  <body>
+    <form>
+      <label for="select_user">Select existing User:</label>
+      <select name="select_user">
+        <option value="">Select</option>
+      </select>
+      <label>Or create a new one:</label>
+      <input type="text" name="input_user" />
+      <button type="submit">Choose user</button>
+    </form>
+    <h1>Time Counter for <span id="user_label"></span></h1>
+    <p id="counter"></p>
+    <button type="button" id="theButton">Start</button>
+    <button type="button" onclick="resetCounter()">Reset</button>
+    <table border="1" id="general_status"></table>
+  </body>
+  <script>
+    let intervalId;
+    let storerHandler = null;
+    let start = null;
+    let lastStart = null;
+    let stopTime = null;
+    let diff = 0.0;
+    let user = null;
+    let url = new URL(location.href);
+    let rootUrl = url.protocol + '//' + url.host + url.pathname;
+
+    (async () => {
+      let resp = await fetch(rootUrl+"users");
+      let users = await resp.json();
+      console.log(users);
+
+      users.forEach((user) => {
+        let opt = document.createElement("option");
+        opt.value = user;
+        opt.textContent = user;
+        document.querySelector("select").appendChild(opt);
+      });
+    })();
+
+    //let user = users[Math.trunc(Math.random() * users.length)];
+
+    let ws = new WebSocket("ws://"+ url.host +"/ws");
+    console.log("websocket created", ws);
+
+    ws.onopen = function (event) {
+      console.log("websocket opened", event);
+    };
+
+    ws.onmessage = async function (event) {
+      let obj = JSON.parse(await event.data.text());
+      console.log("websocket message", obj);
+      if (obj.action == "startedTimer" && obj.user != user) {
+        let but = document.querySelector("#theButton");
+        // if received a websocket message, stop this timer
+        if (but.textContent == "Stop") {
+          console.log(
+            "Stop this timer because " + obj.user + " started its own!"
+          );
+          but.click();
+        }
+      }
+    };
+
+    ws.onerror = function (event) {
+      console.log("websocket error", event);
+    };
+
+    //document.getElementById("counter").textContent = formatTime(0);
+    document
+      .getElementById("theButton")
+      .addEventListener("click", startCounter);
+
+    document.querySelector("form").addEventListener("submit", (evt) => {
+      evt.preventDefault();
+      user = document.querySelector("input[name=input_user]").value;
+      if (user.length == 0) {
+        user = document.querySelector("select").value;
+        if (user.length == 0) {
+          alert("Please select or enter a user");
+          return;
+        }
+      }
+      console.log("chosen user:", user);
+      document.getElementById("user_label").textContent = user;
+      document.title = "Time Counter - " + user;
+      console.log("checking localStorage for stored time count");
+      console.log(localStorage);
+      let stored_state_secs = localStorage.getItem("lasted_secs");
+      if (stored_state_secs) {
+        console.log("stored time count found on localStorage");
+        lastStart = new Date();
+        console.log("now", lastStart);
+        let storedSecs = parseFloat(stored_state_secs);
+        console.log("stored_secs", storedSecs);
+        lastStart.setTime(lastStart.getTime() - storedSecs * 1000);
+        document.getElementById("counter").textContent = formatTime(storedSecs);
+        stopTime = new Date();
+      } else {
+        fetch(
+          rootUrl + "/get_state?" +
+            new URLSearchParams({ user: user })
+        )
+          .then(async (resp) => {
+            console.log(resp.status);
+            if (resp.status == 200) {
+              let obj = await resp.json();
+              let stored_state_secs = obj[user];
+              console.log("last secs for " + user + ":", stored_state_secs);
+              if (stored_state_secs != null) {
+                lastStart = new Date();
+                console.log("now", lastStart);
+                let storedSecs = parseFloat(stored_state_secs);
+                console.log("stored_secs", storedSecs);
+                diff = storedSecs;
+                lastStart.setTime(lastStart.getTime() - diff * 1000);
+                console.log("diff:", diff);
+                console.log("lastStart", lastStart);
+                document.getElementById("counter").textContent =
+                  formatTime(diff);
+                stopTime = new Date();
+              }
+            } else {
+              console.log("Error! no stored state for " + user);
+              console.error(resp.text());
+            }
+          })
+          .catch((err) => {
+            console.log(err);
+          });
+      }
+    });
+
+    // given a number in seconds, return a string in the format "hh:mm:ss"
+    function formatTime(seconds) {
+      let hours = Math.floor(seconds / 3600);
+      let minutes = Math.floor((seconds - hours * 3600) / 60);
+      let secs = Math.floor(seconds - hours * 3600 - minutes * 60);
+      let msecs = Math.floor(
+        (seconds - hours * 3600 - minutes * 60 - secs) * 1000
+      );
+      return `${hours}:${minutes}:${secs}.${msecs}`;
+    }
+
+    // table shows the timers for the other users
+    let stateFetcherHandler = setInterval(() => {
+      fetch(rootUrl + "get_state").then(async (resp) => {
+        console.log(resp.status);
+        if (resp.status == 200) {
+          let htmlBuffer = "";
+          const obj = await resp.json();
+          // turn object into array
+          let arr = [];
+          for (let i = 0; i < Object.entries(obj).length; i++) {
+            let e = Object.entries(obj)[i];
+            arr[e[0]] = parseFloat(e[1]);
+          }
+          // sort assoc array
+          const keys = Object.keys(arr);
+          let arrSorted = [];
+          arr = keys
+            .sort((a, b) => arr[b] - arr[a])
+            .forEach((k) => (arrSorted[k] = arr[k]));
+          console.log(obj, arrSorted);
+          for (let aUser in arrSorted) {
+            if (user == aUser) continue;
+            let secs = parseFloat(arrSorted[aUser]);
+            htmlBuffer +=
+              `<tr><td class='label'>${aUser}</td> <td>` +
+              formatTime(secs) +
+              "</td></tr>";
+          }
+          document.getElementById("general_status").innerHTML = htmlBuffer;
+        } else {
+          console.log(await resp.json());
+          clearInterval(stateFetcherHandler);
+        }
+      });
+    }, 1000);
+
+    function startCounter(evt) {
+      console.log(">startCounter", evt.target);
+
+      document.title += " (ticking)";
+
+      message = {
+        user: user,
+        action: "startedTimer",
+        page: location.href,
+        text: "",
+      };
+      ws.send(JSON.stringify(message));
+
+      if (lastStart == null) {
+        start = new Date();
+      } else {
+        console.log("lastStart", lastStart);
+        if (stopTime == null) {
+          stopTime = new Date();
+        }
+        start = new Date(lastStart.getTime() + (new Date() - stopTime));
+      }
+
+      intervalId = setInterval(() => {
+        diff = (new Date() - start) / 1000;
+        document.getElementById("counter").textContent = formatTime(diff);
+      }, 100);
+      storerHandler = setInterval(async () => {
+        console.log("syncing...");
+        let lasted_syncs = diff;
+        if (lasted_syncs < 0) return;
+        localStorage.setItem("lasted_secs", lasted_syncs);
+        let resp = await fetch(
+          rootUrl + "store_state?" +
+            new URLSearchParams({ user: user, lasted_secs: diff }),
+          {
+            method: "GET",
+          }
+        );
+        console.log(resp.status);
+        if (resp.status == 200) {
+          console.log("The value '" + diff + "' was stored successfully");
+        }
+        //console.log(await resp.json());
+      }, 2500);
+
+      let buttonEl = evt.target;
+      console.log(buttonEl);
+      buttonEl.removeEventListener("click", startCounter);
+      buttonEl.addEventListener("click", stopCounter);
+      buttonEl.innerHTML = "Stop";
+    }
+
+    function stopCounter(evt) {
+      let tit = document.title;
+      let newTit = tit.replace("(ticking)", "");
+      document.title = newTit;
+      console.log(">stopCounter", evt);
+      clearInterval(intervalId);
+      clearInterval(storerHandler);
+      stopTime = new Date();
+      lastStart = start;
+      let buttonEl = evt.target;
+
+      buttonEl.removeEventListener("click", stopCounter);
+      buttonEl.addEventListener("click", startCounter);
+      buttonEl.innerHTML = "Start";
+
+      console.log("syncing...");
+      let lasted_syncs = diff;
+      if (lasted_syncs < 0) return;
+      fetch(
+        rootUrl + "store_state?" +
+          new URLSearchParams({ user: user, lasted_secs: diff })
+      );
+    }
+
+    function resetCounter() {
+      start = new Date();
+      lastStart = null;
+      document.getElementById("counter").textContent = formatTime(0);
+    }
+  </script>
+</html>
