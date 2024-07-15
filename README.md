@@ -12,7 +12,7 @@ Will launch the server and open http://localhost:3000 in a browser.
 `npm run browser` will just launcher the browser and `npm run server` just the local server.
 
 
-
+```
 @startuml
 Actor user
 Entity browser
@@ -27,7 +27,10 @@ user -> browser: user triggers button to stop timing
 browser -> browser: stores last timing record in LocalStorage
 server -> server : stores last timing record internally
 @enduml
+```
+![](README.svg)
 
+```
 @startuml
 Actor user1
 Actor user2
@@ -43,3 +46,5 @@ browser2 -> server: starts time recording
 server -> browser1: sends websocket message
 browser1 -> browser1: stops time counting
 @enduml
+```
+![](README_001.svg)
